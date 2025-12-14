@@ -71,7 +71,7 @@ DEFAULT_CHECKPOINT: dict[EnvMode, Checkpoint] = {
     ),
     EnvMode.LIBERO: Checkpoint(
         config="pi05_libero",
-        dir="gs://openpi-assets/checkpoints/pi05_libero",
+        dir="./checkpoints/pi05_libero",  # 修改为本地路径，需要先下载权重
     ),
 }
 

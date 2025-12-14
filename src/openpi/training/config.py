@@ -895,7 +895,7 @@ _CONFIGS = [
         ),
         data=LeRobotDROIDDataConfig(
             # Replace with your custom DROID LeRobot dataset repo id.
-            repo_id="your_hf_username/my_droid_dataset",
+            repo_id="Lisavila/my_droid_dataset",
             base_config=DataConfig(prompt_from_task=True),
             assets=AssetsConfig(
                 # Important: reuse the original DROID norm stats during fine-tuning!

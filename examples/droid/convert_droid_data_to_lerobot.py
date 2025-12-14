@@ -26,7 +26,7 @@ from PIL import Image
 from tqdm import tqdm
 import tyro
 
-REPO_NAME = "your_hf_username/my_droid_dataset"  # Name of the output dataset, also used for the Hugging Face Hub
+REPO_NAME = "Lisavila/my_droid_dataset"  # Name of the output dataset, also used for the Hugging Face Hub
 
 
 def resize_image(image, size):
