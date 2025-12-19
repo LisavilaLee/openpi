@@ -5,6 +5,17 @@ will compute the mean and standard deviation of the data in the dataset and save
 to the config assets directory.
 """
 
+import os
+
+# 使用 HF Mirror 加速下载，并设置本地存储路径
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+os.environ["HF_LEROBOT_HOME"] = "/storages/liweile/.cache/huggingface/lerobot"
+
+# 如果需要代理，请取消注释并设置
+# os.environ["HTTP_PROXY"] = "http://127.0.0.1:17890"
+# os.environ["HTTPS_PROXY"] = "http://127.0.0.1:17890"
+
+from pathlib import Path
 import numpy as np
 import tqdm
 import tyro
@@ -14,7 +25,6 @@ import openpi.shared.normalize as normalize
 import openpi.training.config as _config
 import openpi.training.data_loader as _data_loader
 import openpi.transforms as transforms
-
 
 class RemoveStrings(transforms.DataTransformFn):
     def __call__(self, x: dict) -> dict:

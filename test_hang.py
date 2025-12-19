@@ -1,0 +1,1 @@
+import time; import os; import sys; print('Start'); t0=time.time(); import flax.nnx; print(f'Import flax.nnx: {time.time()-t0:.2f}s'); t0=time.time(); import jax; print(f'JAX devices: {jax.devices()}'); print(f'JAX init: {time.time()-t0:.2f}s');

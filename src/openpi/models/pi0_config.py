@@ -1,7 +1,10 @@
 import dataclasses
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-import flax.nnx as nnx
+if TYPE_CHECKING:
+    import flax.nnx as nnx
+    from openpi.models.pi0 import Pi0
+
 import jax
 import jax.numpy as jnp
 from typing_extensions import override
@@ -9,10 +12,9 @@ from typing_extensions import override
 from openpi.models import model as _model
 import openpi.models.gemma as _gemma
 from openpi.shared import array_typing as at
-import openpi.shared.nnx_utils as nnx_utils
-
+# Lazy import nnx_utils inside methods to avoid triggering nnx import
 if TYPE_CHECKING:
-    from openpi.models.pi0 import Pi0
+    import openpi.shared.nnx_utils as nnx_utils
 
 
 @dataclasses.dataclass(frozen=True)
@@ -47,6 +49,7 @@ class Pi0Config(_model.BaseModelConfig):
 
     @override
     def create(self, rng: at.KeyArrayLike) -> "Pi0":
+        import flax.nnx as nnx
         from openpi.models.pi0 import Pi0
 
         return Pi0(self, rngs=nnx.Rngs(rng))
@@ -76,8 +79,11 @@ class Pi0Config(_model.BaseModelConfig):
 
         return observation_spec, action_spec
 
-    def get_freeze_filter(self) -> nnx.filterlib.Filter:
+    def get_freeze_filter(self) -> Any:
         """Returns the freeze filter based on the model config."""
+        import flax.nnx as nnx
+        import openpi.shared.nnx_utils as nnx_utils
+        
         filters = []
         has_lora = False
         gemma_params_filter = nnx_utils.PathRegex(".*llm.*")

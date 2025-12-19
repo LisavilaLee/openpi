@@ -3,9 +3,11 @@ import dataclasses
 import functools
 import inspect
 import re
-from typing import Any, ParamSpec, TypeVar
+from typing import Any, ParamSpec, TypeVar, TYPE_CHECKING
 
-import flax.nnx as nnx
+if TYPE_CHECKING:
+    import flax.nnx as nnx
+
 import jax
 
 P = ParamSpec("P")
@@ -25,6 +27,8 @@ def module_jit(meth: Callable[P, R], *jit_args, **jit_kwargs) -> Callable[P, R]:
     when `module_jit` was called. Mutations to the module within `meth` are still allowed, but they will be discarded
     after the method call completes.
     """
+    import flax.nnx as nnx
+    
     if not (inspect.ismethod(meth) and isinstance(meth.__self__, nnx.Module)):
         raise ValueError("module_jit must only be used on bound methods of nnx.Modules.")
 
@@ -57,13 +61,16 @@ class PathRegex:
         if not isinstance(self.pattern, re.Pattern):
             object.__setattr__(self, "pattern", re.compile(self.pattern))
 
-    def __call__(self, path: nnx.filterlib.PathParts, x: Any) -> bool:
+    def __call__(self, path: tuple[str, ...], x: Any) -> bool:
+        # Note: path type is nominally nnx.filterlib.PathParts which is tuple[Key, ...]
         joined_path = self.sep.join(str(x) for x in path)
         assert isinstance(self.pattern, re.Pattern)
         return self.pattern.fullmatch(joined_path) is not None
 
 
-def state_map(state: nnx.State, filter: nnx.filterlib.Filter, fn: Callable[[Any], Any]) -> nnx.State:
+def state_map(state: "nnx.State", filter: Any, fn: Callable[[Any], Any]) -> "nnx.State":
     """Apply a function to the leaves of the state that match the filter."""
+    # filter type is "nnx.filterlib.Filter" but using Any to match usage in config.py
+    import flax.nnx as nnx
     filtered_keys = set(state.filter(filter).flat_state())
     return state.map(lambda k, v: fn(v) if k in filtered_keys else v)
