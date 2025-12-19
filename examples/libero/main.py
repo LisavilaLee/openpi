@@ -3,6 +3,10 @@ import dataclasses
 import logging
 import math
 import pathlib
+import os
+
+# Set LIBERO_CONFIG_PATH before importing libero
+os.environ["LIBERO_CONFIG_PATH"] = "/storages/liweile/.libero"
 
 import imageio
 from libero.libero import benchmark
@@ -181,6 +185,12 @@ def eval_libero(args: Args) -> None:
         # Log final results
         logging.info(f"Current task success rate: {float(task_successes) / float(task_episodes)}")
         logging.info(f"Current total success rate: {float(total_successes) / float(total_episodes)}")
+
+        # Explicitly close environment to avoid EGL cleanup errors
+        try:
+            env.close()
+        except Exception as e:
+            logging.debug(f"Error closing environment (non-critical): {e}")
 
     logging.info(f"Total success rate: {float(total_successes) / float(total_episodes)}")
     logging.info(f"Total episodes: {total_episodes}")
