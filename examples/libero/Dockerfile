@@ -16,6 +16,7 @@ RUN apt-get update && \
     clang \
     libosmesa6-dev \
     libgl1-mesa-glx \
+    libegl1 \
     libglew-dev \
     libglfw3-dev \
     libgles2-mesa-dev \
@@ -55,5 +56,7 @@ init_states: /app/third_party/libero/libero/libero/init_files
 datasets: /app/third_party/libero/libero/datasets
 assets: /app/third_party/libero/libero/libero/assets
 EOF
+
+RUN mkdir -p /usr/share/glvnd/egl_vendor.d && echo '{"file_format_version" : "1.0.0", "ICD" : { "library_path" : "libEGL_nvidia.so.0" }}' > /usr/share/glvnd/egl_vendor.d/10_nvidia.json
 
 CMD ["/bin/bash", "-c", "source /.venv/bin/activate && python examples/libero/main.py $CLIENT_ARGS"]
