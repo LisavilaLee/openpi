@@ -90,6 +90,8 @@ def eval_libero(args: Args) -> None:
 
         # Start episodes
         task_episodes, task_successes = 0, 0
+        saved_success_videos, saved_failure_videos = 0, 0
+        max_success_videos, max_failure_videos = 3, 6
         for episode_idx in tqdm.tqdm(range(args.num_trials_per_task)):
             logging.info(f"\nTask: {task_description}")
 
@@ -168,14 +170,23 @@ def eval_libero(args: Args) -> None:
             task_episodes += 1
             total_episodes += 1
 
-            # Save a replay video of the episode
+            # Save a replay video of the episode (up to 3 successes and 6 failures per task)
             suffix = "success" if done else "failure"
             task_segment = task_description.replace(" ", "_")
-            imageio.mimwrite(
-                pathlib.Path(args.video_out_path) / f"rollout_{task_segment}_{suffix}.mp4",
-                [np.asarray(x) for x in replay_images],
-                fps=10,
+            should_save = (done and saved_success_videos < max_success_videos) or (
+                not done and saved_failure_videos < max_failure_videos
             )
+            if should_save:
+                vid_idx = saved_success_videos if done else saved_failure_videos
+                imageio.mimwrite(
+                    pathlib.Path(args.video_out_path) / f"rollout_{task_segment}_{suffix}_{vid_idx}.mp4",
+                    [np.asarray(x) for x in replay_images],
+                    fps=10,
+                )
+                if done:
+                    saved_success_videos += 1
+                else:
+                    saved_failure_videos += 1
 
             # Log current results
             logging.info(f"Success: {done}")

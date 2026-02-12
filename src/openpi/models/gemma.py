@@ -385,6 +385,15 @@ class Module(nn.Module):
     def embed(self, tokens: at.Int[at.Array, "b t"]) -> at.Float[at.Array, "b t d"]:
         return self.embedder.encode(tokens).astype(self.embed_dtype)
 
+    def deembed(self, hidden_states: at.Float[at.Array, "b t d"]) -> at.Float[at.Array, "b t v"]:
+        """Convert hidden states back to vocabulary logits.
+
+        This is the inverse of embed: it projects hidden states onto the embedding table
+        to produce logits over the vocabulary. Used for autoregressive text generation
+        (e.g., subtask prediction in Pi0.5).
+        """
+        return self.embedder.decode(hidden_states)
+
     @at.typecheck
     def __call__(
         self,

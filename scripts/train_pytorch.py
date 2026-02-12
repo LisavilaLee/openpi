@@ -79,14 +79,17 @@ def init_wandb(config: _config.TrainConfig, *, resuming: bool, enabled: bool = T
     if not ckpt_dir.exists():
         raise FileNotFoundError(f"Checkpoint directory {ckpt_dir} does not exist.")
 
+    # 延长 init 超时，避免网络较慢时 CommError (Run initialization has timed out after 90.0 sec)
+    settings = wandb.Settings(init_timeout=120)
     if resuming:
         run_id = (ckpt_dir / "wandb_id.txt").read_text().strip()
-        wandb.init(id=run_id, resume="must", project=config.project_name)
+        wandb.init(id=run_id, resume="allow", project=config.project_name, settings=settings)
     else:
         wandb.init(
             name=config.exp_name,
             config=dataclasses.asdict(config),
             project=config.project_name,
+            settings=settings,
         )
         (ckpt_dir / "wandb_id.txt").write_text(wandb.run.id)
 

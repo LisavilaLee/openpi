@@ -1,8 +1,23 @@
 import dataclasses
 import functools
 import logging
+import os
 import platform
 from typing import Any
+
+# 与 compute_norm_stats.py 一致：使用同一 LeRobot 缓存目录，避免重复下载数据集
+if "HF_LEROBOT_HOME" not in os.environ:
+    os.environ.setdefault("HF_LEROBOT_HOME", "/storages/liweile/.cache/huggingface/lerobot")
+
+# 设置 Arrow 数据集缓存到大硬盘，避免根目录空间不足
+if "HF_DATASETS_CACHE" not in os.environ:
+    os.environ.setdefault("HF_DATASETS_CACHE", "/storages/liweile/.cache/huggingface/datasets")
+
+# 使用 HF 镜像加速下载
+if "HF_ENDPOINT" not in os.environ:
+    os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+
+
 
 import etils.epath as epath
 import flax.nnx as nnx
@@ -55,14 +70,17 @@ def init_wandb(config: _config.TrainConfig, *, resuming: bool, log_code: bool = 
     ckpt_dir = config.checkpoint_dir
     if not ckpt_dir.exists():
         raise FileNotFoundError(f"Checkpoint directory {ckpt_dir} does not exist.")
+    # 延长 init 超时，避免网络较慢时 CommError (Run initialization has timed out after 90.0 sec)
+    settings = wandb.Settings(init_timeout=120)
     if resuming:
         run_id = (ckpt_dir / "wandb_id.txt").read_text().strip()
-        wandb.init(id=run_id, resume="must", project=config.project_name)
+        wandb.init(id=run_id, resume="allow", project=config.project_name, settings=settings)
     else:
         wandb.init(
             name=config.exp_name,
             config=dataclasses.asdict(config),
             project=config.project_name,
+            settings=settings,
         )
         (ckpt_dir / "wandb_id.txt").write_text(wandb.run.id)
 
