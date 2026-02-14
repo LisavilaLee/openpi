@@ -47,55 +47,6 @@ class PaligemmaTokenizer:
 
         return np.asarray(tokens), np.asarray(mask)
 
-    def tokenize_for_subtask(self, high_level_prompt: str, state: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """Tokenize a high-level prompt for subtask prediction (Pi0.5 only).
-
-        The prompt format ends with "Subtask: " instead of "Action: ", so that
-        the VLM can autoregressively generate the subtask text.
-
-        Args:
-            high_level_prompt: The high-level task instruction (e.g., "clean the bedroom").
-            state: The robot state array, which will be discretized into the prompt.
-
-        Returns:
-            Tuple of (token_ids, token_mask), both as numpy arrays of shape [max_len].
-        """
-        cleaned_text = high_level_prompt.strip().replace("_", " ").replace("\n", " ")
-        discretized_state = np.digitize(state, bins=np.linspace(-1, 1, 256 + 1)[:-1]) - 1
-        state_str = " ".join(map(str, discretized_state))
-        full_prompt = f"Task: {cleaned_text}, State: {state_str};\nSubtask: "
-        tokens = self._tokenizer.encode(full_prompt, add_bos=True)
-
-        tokens_len = len(tokens)
-        if tokens_len < self._max_len:
-            padding = [False] * (self._max_len - tokens_len)
-            mask = [True] * tokens_len + padding
-            tokens = tokens + padding
-        else:
-            if len(tokens) > self._max_len:
-                logging.warning(
-                    f"Token length ({len(tokens)}) exceeds max length ({self._max_len}), truncating. "
-                    "Consider increasing the `max_token_len` in your model config if this happens frequently."
-                )
-            tokens = tokens[: self._max_len]
-            mask = [True] * self._max_len
-
-        return np.asarray(tokens), np.asarray(mask)
-
-    def detokenize(self, token_ids: np.ndarray) -> str:
-        """Convert token IDs back to text.
-
-        Args:
-            token_ids: 1D array of integer token IDs. Padding (zeros) and EOS tokens
-                       are filtered out before decoding.
-
-        Returns:
-            The decoded text string.
-        """
-        # Filter out padding (0/False) and EOS token (1)
-        valid_ids = [int(t) for t in token_ids if int(t) > 1]
-        return self._tokenizer.decode(valid_ids)
-
 
 class FASTTokenizer:
     def __init__(self, max_len: int = 256, fast_tokenizer_path: str = "physical-intelligence/fast"):

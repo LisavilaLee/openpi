@@ -5,7 +5,6 @@ import flax.nnx as nnx
 import flax.nnx.bridge as nnx_bridge
 import jax
 import jax.numpy as jnp
-import numpy as np
 from typing_extensions import override
 
 from openpi.models import model as _model
@@ -15,8 +14,6 @@ import openpi.models.siglip as _siglip
 from openpi.shared import array_typing as at
 
 logger = logging.getLogger("openpi")
-
-PALIGEMMA_EOS_TOKEN = 1
 
 
 def make_attn_mask(input_mask, mask_ar):
@@ -64,36 +61,6 @@ def posemb_sincos(
         precision=jax.lax.Precision.HIGHEST,
     )
     return jnp.concatenate([jnp.sin(sinusoid_input), jnp.cos(sinusoid_input)], axis=-1)
-
-
-@jax.vmap
-def _left_to_right_align(x, input_mask, attn_mask):
-    """Converts input from left-aligned to right-aligned (for KV-cache decoding).
-
-    Adapted from pi0_fast.py. Due to vmap, this operates on a single example (not batch level).
-    """
-    assert x.ndim == 2
-    assert input_mask.ndim == 1
-    assert attn_mask.ndim == 2
-    assert x.shape[0] == input_mask.shape[0]
-    assert attn_mask.shape[0] == attn_mask.shape[1], attn_mask.shape
-    seqlen = jnp.max(input_mask * jnp.arange(input_mask.shape[0])) + 1
-    x = jnp.roll(x, -seqlen, axis=0)
-    input_mask = jnp.roll(input_mask, -seqlen, axis=0)
-    attn_mask = jnp.roll(attn_mask, -seqlen, axis=(0, 1))
-    return x, input_mask, attn_mask
-
-
-def _put_along_last_axis(arr, indices, values):
-    """Like np.put_along_axis(..., axis=-1), since jax is missing it.
-
-    Adapted from pi0_fast.py.
-    """
-    assert arr.ndim == indices.ndim == values.ndim, (arr.ndim, indices.ndim, values.ndim)
-    onehot = jax.nn.one_hot(indices, arr.shape[-1], dtype=values.dtype)
-    put_mask = jnp.einsum("...i,...in->...n", jnp.ones(values.shape, jnp.int32), onehot)
-    put_values = jnp.einsum("...i,...in->...n", values, onehot)
-    return jnp.where(put_mask, put_values, arr)
 
 
 class Pi0(_model.BaseModel):
@@ -310,183 +277,3 @@ class Pi0(_model.BaseModel):
 
         x_0, _ = jax.lax.while_loop(cond, step, (noise, 1.0))
         return x_0
-
-    def generate_subtask(
-        self,
-        rng: at.KeyArrayLike,
-        observation: _model.Observation,
-        *,
-        max_decoding_steps: int = 128,
-        temperature: float = 0.0,
-    ) -> at.Int[at.Array, "b s"]:
-        """Autoregressively generate subtask text tokens using the VLM (Pi0.5 only).
-
-        This implements Stage 1 of the pi0.5 two-stage inference: given a high-level
-        prompt (e.g., "clean the bedroom") and images, the VLM generates a low-level
-        subtask (e.g., "pick up the pillow") via next-token prediction.
-
-        The approach is adapted from:
-        - Pi0FAST.sample_actions (pi0_fast.py) for the autoregressive decoding loop
-        - Issue #701 (github.com/Physical-Intelligence/openpi/issues/701) for the
-          concept of using deembed on prefix_out to get vocabulary logits
-
-        Args:
-            rng: Random key for sampling.
-            observation: The observation containing images and tokenized high-level prompt.
-                The tokenized_prompt should be formatted for subtask prediction (ending
-                with "Subtask: " rather than "Action: ").
-            max_decoding_steps: Maximum number of tokens to generate.
-            temperature: Sampling temperature. 0.0 = greedy (argmax).
-
-        Returns:
-            Generated token IDs of shape [batch_size, max_decoding_steps].
-        """
-        if not self.pi05:
-            raise RuntimeError("generate_subtask is only supported for Pi0.5 (pi05=True)")
-
-        observation = _model.preprocess_observation(None, observation, train=False)
-
-        # Step 1: Embed the prefix (images + high-level prompt)
-        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
-        prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
-
-        # Step 2: Right-align for KV-cache decoding
-        prefix_tokens, prefix_mask, prefix_attn_mask = _left_to_right_align(
-            prefix_tokens, prefix_mask, prefix_attn_mask
-        )
-        prefill_size = prefix_tokens.shape[1]
-        prefill_len = jnp.sum(prefix_mask, axis=-1)
-        prefix_start = prefill_size - prefill_len
-
-        # Step 3: Prefill KV cache with the prefix (VLM stream only, no action expert)
-        # Pad attention mask to accommodate decoding steps in the KV cache
-        prefix_attn_mask = jnp.pad(prefix_attn_mask, ((0, 0), (0, 0), (0, max_decoding_steps)))
-        prefix_positions = jnp.cumsum(prefix_mask, axis=-1) - 1
-        (prefix_out, _), kv_cache = self.PaliGemma.llm(
-            [prefix_tokens, None],
-            mask=prefix_attn_mask,
-            positions=prefix_positions,
-            adarms_cond=[None, None],
-        )
-
-        # Step 4: Get initial logits from the last prefix hidden state
-        # prefix_out shape: [batch, prefill_size, hidden_dim]
-        last_hidden = prefix_out[:, -1:]  # [batch, 1, hidden_dim]
-        last_logit = self.PaliGemma.llm(last_hidden, method="deembed")  # [batch, 1, vocab_size]
-
-        batch_size = prefix_tokens.shape[0]
-        output_tokens = jnp.zeros((batch_size, max_decoding_steps), dtype=jnp.int32)
-
-        # Step 5: Autoregressive decoding loop
-        def step(carry):
-            rng, last_logit, output_tokens, cache, all_eos, step_idx = carry
-
-            # Sample token from logits
-            rng, rng_step = jax.random.split(rng)
-            token = jax.lax.cond(
-                temperature > 0.0,
-                lambda _: jax.random.categorical(rng_step, last_logit / temperature, axis=-1),
-                lambda _: jnp.argmax(last_logit, axis=-1),
-                operand=None,
-            )
-            # token shape: [batch, 1]
-            output_tokens = _put_along_last_axis(
-                output_tokens,
-                jnp.broadcast_to(step_idx, (batch_size, 1)),
-                token.astype(jnp.int32),
-            )
-
-            # Check for early stopping (all batch elements have EOS)
-            has_eos = jnp.any(token == PALIGEMMA_EOS_TOKEN, axis=-1)
-            all_eos = jnp.all(has_eos)
-
-            # Embed the sampled token and decode one more step
-            token_embedding = self.PaliGemma.llm(token.astype(jnp.int32), method="embed")
-            # [batch, 1, hidden_dim]
-
-            positions = prefill_len[:, None] + step_idx
-            mask = jnp.logical_and(
-                jnp.arange(prefill_size + max_decoding_steps)[None, None, :]
-                >= prefix_start[:, None, None],
-                jnp.arange(prefill_size + max_decoding_steps)[None, None, :]
-                < jnp.broadcast_to(
-                    prefill_size + step_idx + 1,
-                    (batch_size, 1, 1),
-                ),
-            )
-
-            (next_hidden, _), new_kv_cache = self.PaliGemma.llm(
-                [token_embedding, None],
-                mask=mask,
-                positions=positions,
-                kv_cache=cache,
-                adarms_cond=[None, None],
-            )
-            # next_hidden shape: [batch, 1, hidden_dim]
-            next_logit = self.PaliGemma.llm(next_hidden, method="deembed")
-
-            return rng, next_logit, output_tokens, new_kv_cache, all_eos, step_idx + 1
-
-        def cond(carry):
-            _, _, _, _, all_eos, step_idx = carry
-            return (~all_eos) & (step_idx < max_decoding_steps)
-
-        _, _, output_tokens, _, _, _ = jax.lax.while_loop(
-            cond, step, (rng, last_logit, output_tokens, kv_cache, False, 0)
-        )
-
-        return output_tokens
-
-    def sample_actions_with_subtask(
-        self,
-        rng: at.KeyArrayLike,
-        observation: _model.Observation,
-        *,
-        num_steps: int | at.Int[at.Array, ""] = 10,
-        noise: at.Float[at.Array, "b ah ad"] | None = None,
-        max_decoding_steps: int = 128,
-        temperature: float = 0.0,
-    ) -> tuple[_model.Actions, at.Int[at.Array, "b s"]]:
-        """Two-stage inference for Pi0.5: generate subtask, then generate actions.
-
-        Stage 1: Use the VLM to autoregressively predict a low-level subtask from
-                 the high-level prompt.
-        Stage 2: Use the generated subtask as the language condition for Flow Matching
-                 action generation.
-
-        This requires the observation's tokenized_prompt to be formatted for subtask
-        prediction (ending with "Subtask: ").
-
-        Args:
-            rng: Random key.
-            observation: Observation with high-level prompt tokenized for subtask prediction.
-            num_steps: Number of Flow Matching denoising steps (Stage 2).
-            noise: Optional initial noise for Flow Matching.
-            max_decoding_steps: Maximum subtask tokens to generate (Stage 1).
-            temperature: Sampling temperature for subtask generation.
-
-        Returns:
-            Tuple of (actions, subtask_tokens):
-            - actions: Generated continuous actions [batch, action_horizon, action_dim].
-            - subtask_tokens: Generated subtask token IDs [batch, max_decoding_steps].
-        """
-        if not self.pi05:
-            raise RuntimeError("sample_actions_with_subtask is only supported for Pi0.5 (pi05=True)")
-
-        subtask_rng, action_rng = jax.random.split(rng)
-
-        # Stage 1: Generate subtask tokens
-        subtask_tokens = self.generate_subtask(
-            subtask_rng,
-            observation,
-            max_decoding_steps=max_decoding_steps,
-            temperature=temperature,
-        )
-
-        # Stage 2: Re-tokenize with the generated subtask and generate actions.
-        # NOTE: This stage requires re-building the observation with the new prompt.
-        # Since JAX's jit requires static shapes and we can't easily re-tokenize inside
-        # a jitted function, we return the subtask tokens and let the caller handle
-        # re-tokenization and the second call to sample_actions.
-        # See Policy.infer_with_subtask for the complete two-stage pipeline.
-        return subtask_tokens
