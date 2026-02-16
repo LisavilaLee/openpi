@@ -83,6 +83,11 @@ def maybe_download(url: str, *, force_download: bool = False, **kwargs) -> pathl
             # Download the data to a local cache.
             logger.info(f"Downloading {url} to {local_path}")
             scratch_path = local_path.with_suffix(".partial")
+            # So that gcsfs/aiohttp use HTTP_PROXY/HTTPS_PROXY when downloading from GCS
+            if url.strip().lower().startswith("gs://"):
+                kwargs = dict(kwargs)
+                kwargs.setdefault("session_kwargs", {})
+                kwargs["session_kwargs"] = {**kwargs["session_kwargs"], "trust_env": True}
             _download_fsspec(url, scratch_path, **kwargs)
 
             shutil.move(scratch_path, local_path)

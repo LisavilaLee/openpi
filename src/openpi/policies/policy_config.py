@@ -92,3 +92,76 @@ def create_trained_policy(
         is_pytorch=is_pytorch,
         pytorch_device=pytorch_device if is_pytorch else None,
     )
+
+
+def create_subtask_policy(
+    train_config: _config.TrainConfig,
+    checkpoint_dir: pathlib.Path | str,
+    *,
+    repack_transforms: transforms.Group | None = None,
+    sample_kwargs: dict[str, Any] | None = None,
+    default_prompt: str | None = None,
+    norm_stats: dict[str, transforms.NormStats] | None = None,
+    subtask_max_gen_steps: int = 50,
+    subtask_temperature: float = 0.0,
+) -> _policy.SubtaskPolicy:
+    """Create a SubtaskPolicy that supports two-stage inference (subtask generation + action generation).
+
+    This is the π0.5 variant that first generates a subtask from a high-level instruction,
+    then uses that subtask to generate actions via flow matching.
+
+    The input transforms are configured to NOT include prompt tokenization,
+    because SubtaskPolicy handles prompt tokenization internally for both stages.
+
+    Args:
+        train_config: The training config (should be a pi05 config).
+        checkpoint_dir: The checkpoint directory to load from.
+        repack_transforms: Optional transforms applied before any other transforms.
+        sample_kwargs: Kwargs for sample_actions (e.g. num_steps).
+        default_prompt: Default high-level prompt to inject if none provided.
+        norm_stats: Norm stats for state/action normalization.
+        subtask_max_gen_steps: Max tokens to generate for subtask.
+        subtask_temperature: Sampling temperature for subtask generation.
+
+    Returns:
+        A SubtaskPolicy instance.
+    """
+    repack_transforms = repack_transforms or transforms.Group()
+    checkpoint_dir = download.maybe_download(str(checkpoint_dir))
+
+    logging.info("Loading model for subtask policy...")
+    model = train_config.model.load(_model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16))
+    data_config = train_config.data.create(train_config.assets_dirs, train_config.model)
+    if norm_stats is None:
+        if data_config.asset_id is None:
+            raise ValueError("Asset id is required to load norm stats.")
+        norm_stats = _checkpoints.load_norm_stats(checkpoint_dir / "assets", data_config.asset_id)
+
+    # Build input transforms WITHOUT prompt tokenization (TokenizePrompt).
+    # SubtaskPolicy handles prompt tokenization internally for both stages.
+    input_transforms_no_tokenize = []
+    for t in [
+        *repack_transforms.inputs,
+        transforms.InjectDefaultPrompt(default_prompt),
+        *data_config.data_transforms.inputs,
+        transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
+        *data_config.model_transforms.inputs,
+    ]:
+        if not isinstance(t, transforms.TokenizePrompt):
+            input_transforms_no_tokenize.append(t)
+
+    return _policy.SubtaskPolicy(
+        model,
+        transforms=input_transforms_no_tokenize,
+        output_transforms=[
+            *data_config.model_transforms.outputs,
+            transforms.Unnormalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
+            *data_config.data_transforms.outputs,
+            *repack_transforms.outputs,
+        ],
+        sample_kwargs=sample_kwargs,
+        metadata=train_config.policy_metadata,
+        subtask_max_gen_steps=subtask_max_gen_steps,
+        subtask_temperature=subtask_temperature,
+        tokenizer_max_len=train_config.model.max_token_len,
+    )

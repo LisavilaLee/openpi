@@ -410,6 +410,19 @@ class Module(nn.Module):
             f(e, a)[0] if e is not None else e for f, e, a in zip(self.final_norms, embedded, adarms_cond, strict=True)
         ], kv_cache
 
+    def decode_to_logits(self, hidden_states: at.Float[at.Array, "b t d"]) -> at.Float[at.Array, "b t v"]:
+        """Map hidden states back to vocabulary logits via the embedding table transpose.
+
+        This is the standard language model head: logits = hidden_states @ embedding_table.T
+
+        Args:
+            hidden_states: float32[batch, seq_len, width] — output of the final transformer layer + norm.
+
+        Returns:
+            logits: float32[batch, seq_len, vocab_size] — unnormalized log-probabilities over the vocabulary.
+        """
+        return self.embedder.decode(hidden_states)
+
     def init(self, use_adarms: Sequence[bool]):
         """Convenience method for initializing all parameters, necessary due to the quirks of linen."""
         self.embed(jnp.zeros((1, 1), dtype=jnp.int32))
