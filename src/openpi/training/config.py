@@ -641,6 +641,30 @@ _CONFIGS = [
         ),
     ),
     #
+    # pi05_base: Inference-only config using the pre-trained pi0.5 base checkpoint.
+    # Unlike fine-tuned variants (pi05_droid, pi05_libero), the base checkpoint retains
+    # VLM language generation ability, enabling meaningful subtask prediction.
+    # Uses DROID-style data transforms for observation processing.
+    #
+    TrainConfig(
+        name="pi05_base",
+        model=pi0_config.Pi0Config(pi05=True),
+        # defaults: action_horizon=50, action_dim=32, max_token_len=200, discrete_state_input=True
+        data=SimpleDataConfig(
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi05_base/assets",
+                asset_id="droid",
+            ),
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[droid_policy.DroidInputs(model_type=ModelType.PI05)],
+                outputs=[droid_policy.DroidOutputs()],
+            ),
+            base_config=DataConfig(
+                prompt_from_task=True,
+            ),
+        ),
+    ),
+    #
     # Fine-tuning Libero configs.
     #
     # These train configs define the hyperparameters for fine-tuning the base model on your own dataset.

@@ -7,28 +7,29 @@ This script demonstrates the full pipeline:
   Stage 2: Action Expert generates actions conditioned on the subtask
 
 Available configs:
+  pi05_base    — Pre-trained base model (retains VLM language generation for subtask prediction)
+  pi05_droid   — Fine-tuned on DROID (discrete_state_input=True)
   pi05_libero  — Fine-tuned on LIBERO (discrete_state_input=False)
-  pi05_droid   — Inference on DROID (discrete_state_input=True)
-  pi05_aloha   — Inference on ALOHA (discrete_state_input=True)
-  NOTE: 'pi05_base' is NOT a valid config name; it is only a pretrained
-        checkpoint used by fine-tuning configs.
+  pi05_aloha   — Fine-tuned on ALOHA (discrete_state_input=True)
 
 Usage:
+  # BASE model (recommended for subtask generation, downloads from GCS):
+  CUDA_VISIBLE_DEVICES=0 TF_CPP_MIN_LOG_LEVEL=2 uv run scripts/test_subtask_inference.py \\
+      --config pi05_base --prompt "clean the table"
+
   # LIBERO (local checkpoint):
-  TF_CPP_MIN_LOG_LEVEL=2 uv run scripts/test_subtask_inference.py \\
+  CUDA_VISIBLE_DEVICES=0 TF_CPP_MIN_LOG_LEVEL=2 uv run scripts/test_subtask_inference.py \\
       --config pi05_libero \\
       --checkpoint /path/to/pi05_libero/checkpoint \\
       --prompt "pick up the red cup"
 
   # DROID (downloads from GCS):
   CUDA_VISIBLE_DEVICES=0 TF_CPP_MIN_LOG_LEVEL=2 uv run scripts/test_subtask_inference.py \\
-      --config pi05_droid \\
-      --prompt "clean the table"
+      --config pi05_droid --prompt "clean the table"
 
-  # DROID with custom temperature:
-  TF_CPP_MIN_LOG_LEVEL=2 uv run scripts/test_subtask_inference.py \\
-      --config pi05_droid \\
-      --prompt "organize the workspace" --temperature 0.7
+  # With sampling temperature:
+  CUDA_VISIBLE_DEVICES=0 TF_CPP_MIN_LOG_LEVEL=2 uv run scripts/test_subtask_inference.py \\
+      --config pi05_base --prompt "organize the workspace" --temperature 0.7
 """
 
 import argparse
@@ -77,7 +78,7 @@ def create_dummy_observation(config_name: str) -> dict:
             "observation/wrist_image": np.random.randint(0, 256, (224, 224, 3), dtype=np.uint8),
             "observation/state": np.random.randn(8).astype(np.float32) * 0.1,
         }
-    elif "droid" in config_lower:
+    elif "droid" in config_lower or "base" in config_lower:
         # DROID: DroidInputs expects joint_position (7) + gripper_position (1)
         obs = {
             "observation/exterior_image_1_left": np.random.randint(0, 256, (224, 224, 3), dtype=np.uint8),
@@ -124,6 +125,7 @@ def main():
         checkpoint_dir = args.checkpoint
     else:
         default_checkpoints = {
+            "pi05_base": "gs://openpi-assets/checkpoints/pi05_base",
             "pi05_droid": "gs://openpi-assets/checkpoints/pi05_droid",
             "pi05_libero": "gs://openpi-assets/checkpoints/pi05_libero",
             "pi05_aloha": "gs://openpi-assets/checkpoints/pi05_aloha",

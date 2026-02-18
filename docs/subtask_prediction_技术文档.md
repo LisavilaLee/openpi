@@ -426,22 +426,31 @@ TF_CPP_MIN_LOG_LEVEL=2 uv run scripts/test_subtask_inference.py \
     --temperature 0.0
 ```
 
-### 其他常用命令 (需下载对应模型)
+### 推荐：使用 pi05_base（保留语言生成能力）
 
-> **注意**: `pi05_base` 不是有效的 config 名称。它仅作为预训练 checkpoint 路径存在，
-> 被 fine-tuning 配置引用。有效的 pi05 config 为：`pi05_libero`、`pi05_droid`、`pi05_aloha`。
+> **重要**: fine-tuned 模型（pi05_droid、pi05_libero）只用 action loss 训练，VLM 的语言生成能力退化，
+> subtask 输出为空或乱码。**pi05_base** 是预训练权重，保留了完整的语言生成能力，推荐用于 subtask prediction。
 
 ```bash
-# 使用 pi05_droid（需要从 GCS 下载 checkpoint）
-TF_CPP_MIN_LOG_LEVEL=2 uv run scripts/test_subtask_inference.py \
-    --config pi05_droid \
+# 使用 pi05_base（推荐，需从 GCS 下载 ~10GB checkpoint）
+CUDA_VISIBLE_DEVICES=0 TF_CPP_MIN_LOG_LEVEL=2 uv run scripts/test_subtask_inference.py \
+    --config pi05_base \
     --prompt "clean the table"
 
 # 带温度采样 (增加生成的多样性)
-TF_CPP_MIN_LOG_LEVEL=2 uv run scripts/test_subtask_inference.py \
-    --config pi05_droid \
+CUDA_VISIBLE_DEVICES=0 TF_CPP_MIN_LOG_LEVEL=2 uv run scripts/test_subtask_inference.py \
+    --config pi05_base \
     --prompt "organize the workspace" \
     --temperature 0.7
+```
+
+### 其他命令（fine-tuned 模型）
+
+```bash
+# pi05_droid（subtask 可能为空，但 action 生成正常）
+CUDA_VISIBLE_DEVICES=0 TF_CPP_MIN_LOG_LEVEL=2 uv run scripts/test_subtask_inference.py \
+    --config pi05_droid \
+    --prompt "clean the table"
 ```
 
 # 4. 在 Python 代码中使用 SubtaskPolicy
