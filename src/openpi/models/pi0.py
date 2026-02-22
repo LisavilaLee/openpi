@@ -81,7 +81,7 @@ class Pi0(_model.BaseModel):
                 configs=[paligemma_config, action_expert_config],
                 embed_dtype=config.dtype,
                 adarms=config.pi05,
-            )
+            ) 
         )
         llm.lazy_init(rngs=rngs, method="init", use_adarms=[False, True] if config.pi05 else [False, False])
         img = nnx_bridge.ToNNX(
@@ -393,6 +393,38 @@ class Pi0(_model.BaseModel):
 
         return generated_tokens
 
+    def _compute_subtask_ce_loss(
+        self,
+        prefix_out: at.Float[at.Array, "b s d"],
+        observation: _model.Observation,
+        num_image_tokens: int,
+    ) -> at.Float[at.Array, " b"]:
+        """Compute cross-entropy loss on the subtask portion of the prefix.
+
+        Uses next-token prediction: hidden[i] predicts token[i+1].
+        Loss is masked to only the subtask region via observation.token_loss_mask.
+
+        Args:
+            prefix_out: VLM hidden states [B, prefix_S, vlm_width].
+            observation: Must have tokenized_prompt and token_loss_mask.
+            num_image_tokens: Number of image tokens before the text tokens.
+
+        Returns:
+            Per-sample CE loss [B].
+        """
+        num_text = self.max_token_len
+        text_hidden = prefix_out[:, num_image_tokens : num_image_tokens + num_text - 1, :]
+        logits = self.PaliGemma.llm(text_hidden, method="decode_to_logits")
+
+        targets = observation.tokenized_prompt[:, 1:]
+        loss_mask = observation.token_loss_mask[:, 1:].astype(jnp.float32)
+
+        log_probs = jax.nn.log_softmax(logits, axis=-1)
+        token_nll = -jnp.take_along_axis(log_probs, targets[:, :, None], axis=-1).squeeze(-1)
+
+        masked_nll = token_nll * loss_mask
+        return jnp.sum(masked_nll, axis=-1) / jnp.clip(jnp.sum(loss_mask, axis=-1), 1)
+
     def sample_actions_with_subtask(
         self,
         rng: at.KeyArrayLike,
@@ -488,3 +520,78 @@ class Pi0(_model.BaseModel):
         actions = self.sample_actions(action_rng, action_obs, num_steps=num_steps, noise=noise)
 
         return actions, subtask_text
+
+
+class Pi05Subtask(Pi0):
+    """Pi0.5 with joint subtask language-modeling loss + flow-matching action loss.
+
+    Architecture is identical to Pi0(pi05=True).  The only difference is
+    compute_loss, which adds a cross-entropy term for subtask prediction.
+
+    The per-token AR mask (observation.token_ar_mask) produced by
+    TokenizeSubtaskTraining enforces *causal* attention on the subtask
+    portion of the text tokens, while keeping bidirectional attention for
+    the high-level prompt and image tokens.
+    """
+
+    @override
+    def compute_loss(
+        self,
+        rng: at.KeyArrayLike,
+        observation: _model.Observation,
+        actions: _model.Actions,
+        *,
+        train: bool = False,
+    ) -> at.Float[at.Array, "*b ah"]:
+        preprocess_rng, noise_rng, time_rng = jax.random.split(rng, 3)
+        observation = _model.preprocess_observation(preprocess_rng, observation, train=train)
+
+        batch_shape = actions.shape[:-2]
+        noise = jax.random.normal(noise_rng, actions.shape)
+        time = jax.random.beta(time_rng, 1.5, 1, batch_shape) * 0.999 + 0.001
+        time_expanded = time[..., None, None]
+        x_t = time_expanded * noise + (1 - time_expanded) * actions
+        u_t = noise - actions
+
+        prefix_tokens, prefix_mask, _ = self.embed_prefix(observation)
+        suffix_tokens, suffix_mask, suffix_ar_mask_1d, adarms_cond = self.embed_suffix(observation, x_t, time)
+
+        B = prefix_tokens.shape[0]
+        prefix_S = prefix_tokens.shape[1]
+        num_text_tokens = self.max_token_len
+        num_image_tokens = prefix_S - num_text_tokens
+
+        img_ar = jnp.zeros((B, num_image_tokens), dtype=jnp.bool_)
+        if observation.token_ar_mask is not None:
+            text_ar = observation.token_ar_mask.astype(jnp.bool_)
+        else:
+            text_ar = jnp.zeros((B, num_text_tokens), dtype=jnp.bool_)
+        prefix_ar_mask = jnp.concatenate([img_ar, text_ar], axis=1)
+
+        suffix_ar_mask = jnp.broadcast_to(
+            suffix_ar_mask_1d[None, :], (B, suffix_tokens.shape[1])
+        )
+
+        input_mask = jnp.concatenate([prefix_mask, suffix_mask], axis=1)
+        ar_mask = jnp.concatenate([prefix_ar_mask, suffix_ar_mask], axis=1)
+        attn_mask = make_attn_mask(input_mask, ar_mask)
+        positions = jnp.cumsum(input_mask, axis=1) - 1
+
+        (prefix_out, suffix_out), _ = self.PaliGemma.llm(
+            [prefix_tokens, suffix_tokens],
+            mask=attn_mask,
+            positions=positions,
+            adarms_cond=[None, adarms_cond],
+        )
+
+        # --- flow-matching loss (same as Pi0) ---
+        v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
+        flow_loss = jnp.mean(jnp.square(v_t - u_t), axis=-1)
+
+        # --- subtask cross-entropy loss ---
+        if observation.token_loss_mask is not None:
+            subtask_loss = self._compute_subtask_ce_loss(prefix_out, observation, num_image_tokens)
+        else:
+            subtask_loss = jnp.zeros(B)
+
+        return subtask_loss[:, None] + flow_loss

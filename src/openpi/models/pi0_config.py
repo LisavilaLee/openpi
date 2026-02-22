@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import flax.nnx as nnx
-    from openpi.models.pi0 import Pi0
+    from openpi.models.pi0 import Pi0, Pi05Subtask
 
 import jax
 import jax.numpy as jnp
@@ -112,3 +112,42 @@ class Pi0Config(_model.BaseModelConfig):
         if not filters:
             return nnx.Nothing
         return nnx.All(*filters)
+
+
+@dataclasses.dataclass(frozen=True)
+class Pi05SubtaskConfig(Pi0Config):
+    """Config for pi0.5 with subtask CE loss + flow-matching action loss.
+
+    Same architecture as Pi0 with pi05=True, but uses a different model type
+    so that the data pipeline produces token_ar_mask and token_loss_mask for
+    joint subtask language-modeling training.
+    """
+
+    pi05: bool = True
+
+    @property
+    @override
+    def model_type(self) -> _model.ModelType:
+        return _model.ModelType.PI05_SUBTASK
+
+    @override
+    def create(self, rng: at.KeyArrayLike) -> "Pi05Subtask":
+        import flax.nnx as nnx
+        from openpi.models.pi0 import Pi05Subtask
+
+        return Pi05Subtask(self, rngs=nnx.Rngs(rng))
+
+    @override
+    def inputs_spec(self, *, batch_size: int = 1) -> tuple[_model.Observation, _model.Actions]:
+        obs_spec, action_spec = super().inputs_spec(batch_size=batch_size)
+        with at.disable_typechecking():
+            obs_spec = _model.Observation(
+                images=obs_spec.images,
+                image_masks=obs_spec.image_masks,
+                state=obs_spec.state,
+                tokenized_prompt=obs_spec.tokenized_prompt,
+                tokenized_prompt_mask=obs_spec.tokenized_prompt_mask,
+                token_ar_mask=jax.ShapeDtypeStruct([batch_size, self.max_token_len], jnp.int32),
+                token_loss_mask=jax.ShapeDtypeStruct([batch_size, self.max_token_len], jnp.bool_),
+            )
+        return obs_spec, action_spec

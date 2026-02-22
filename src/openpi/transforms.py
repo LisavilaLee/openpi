@@ -291,6 +291,40 @@ class TokenizeSubtaskPrompt(DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class TokenizeSubtaskTraining(DataTransformFn):
+    """Tokenize prompt for pi0.5 subtask training (joint CE + flow-matching loss).
+
+    Uses identity subtask by default: high_prompt = low_prompt = prompt.
+    Produces token_ar_mask (causal on subtask portion) and token_loss_mask
+    (CE loss on subtask portion only).
+
+    Replace the high/low split logic here to plug in real subtask annotations.
+    """
+    tokenizer: _tokenizer.PaligemmaTokenizer
+
+    def __call__(self, data: DataDict) -> DataDict:
+        prompt = data.pop("prompt", None)
+        if prompt is None:
+            raise ValueError("Prompt is required for subtask training")
+        if not isinstance(prompt, str):
+            prompt = prompt.item()
+
+        # --- Identity subtask: high = low = prompt ---
+        # Swap in real subtask annotations here when available.
+        high_prompt = prompt
+        low_prompt = prompt
+
+        tokens, mask, ar_mask, loss_mask = self.tokenizer.tokenize_high_low_prompt(high_prompt, low_prompt)
+        return {
+            **data,
+            "tokenized_prompt": tokens,
+            "tokenized_prompt_mask": mask,
+            "token_ar_mask": ar_mask,
+            "token_loss_mask": loss_mask,
+        }
+
+
+@dataclasses.dataclass(frozen=True)
 class TokenizeFASTInputs(DataTransformFn):
     tokenizer: _tokenizer.FASTTokenizer
 
