@@ -51,42 +51,6 @@ class PaligemmaTokenizer:
 
         return np.asarray(tokens), np.asarray(mask)
 
-    def tokenize_subtask_prompt(self, high_level_prompt: str) -> tuple[np.ndarray, np.ndarray]:
-        """Tokenize a high-level prompt into the format for subtask generation.
-
-        Formats the prompt as: "Task: <high_level_prompt>. Subtask: "
-        This serves as the prefix for autoregressive subtask text generation.
-
-        Design borrowed from BrunoFANG1/openpi_subtask_generation's tokenize_high_level_prompt().
-
-        Args:
-            high_level_prompt: High-level task instruction, e.g. "clean the bedroom".
-
-        Returns:
-            tokens: int32[max_token_len] — padded token IDs.
-            mask:   bool[max_token_len]  — True for valid (non-padding) positions.
-        """
-        cleaned_text = high_level_prompt.lower().strip().replace("_", " ").replace("\n", " ")
-        # Normalize trailing punctuation and add period as separator
-        if cleaned_text and cleaned_text[-1] in string.punctuation:
-            cleaned_text = cleaned_text[:-1]
-        full_prompt = f"Task: {cleaned_text}. Subtask: "
-        tokens = self._tokenizer.encode(full_prompt, add_bos=True)
-
-        tokens_len = len(tokens)
-        if tokens_len < self._max_len:
-            padding = [False] * (self._max_len - tokens_len)
-            mask = [True] * tokens_len + padding
-            tokens = tokens + padding
-        else:
-            if tokens_len > self._max_len:
-                logging.warning(
-                    f"Subtask prompt token length ({tokens_len}) exceeds max length ({self._max_len}), truncating."
-                )
-            tokens = tokens[: self._max_len]
-            mask = [True] * self._max_len
-
-        return np.asarray(tokens), np.asarray(mask)
 
     def tokenize_high_low_prompt(
         self, high_prompt: str, low_prompt: str
@@ -151,23 +115,6 @@ class PaligemmaTokenizer:
             np.asarray(ar_mask_list, dtype=np.int32),
             np.asarray(loss_mask_list, dtype=np.bool_),
         )
-
-    def detokenize(self, tokens: np.ndarray) -> str:
-        """Decode token IDs back to a text string.
-
-        Filters out padding tokens (id=0) and EOS tokens (id=1) before decoding.
-
-        Design borrowed from BrunoFANG1/openpi_subtask_generation's detokenize().
-
-        Args:
-            tokens: int32[seq_len] — token IDs, may contain padding and EOS.
-
-        Returns:
-            Decoded text string.
-        """
-        # Filter out padding (0) and EOS (1)
-        valid_tokens = [int(t) for t in tokens if int(t) > PALIGEMMA_EOS_TOKEN]
-        return self._tokenizer.decode(valid_tokens)
 
 
 class FASTTokenizer:

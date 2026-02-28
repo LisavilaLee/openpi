@@ -267,30 +267,6 @@ class TokenizePrompt(DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
-class TokenizeSubtaskPrompt(DataTransformFn):
-    """Tokenize a high-level prompt for subtask generation.
-
-    Formats the prompt as: "Task: <high_level_prompt>. Subtask: "
-    This is used as the prefix for autoregressive subtask text generation
-    in the two-stage π0.5 inference pipeline.
-
-    The input data dict should contain a "prompt" key with the high-level instruction.
-    The output adds "tokenized_prompt" and "tokenized_prompt_mask" keys.
-    """
-    tokenizer: _tokenizer.PaligemmaTokenizer
-
-    def __call__(self, data: DataDict) -> DataDict:
-        if (prompt := data.pop("prompt", None)) is None:
-            raise ValueError("Prompt is required for subtask generation")
-
-        if not isinstance(prompt, str):
-            prompt = prompt.item()
-
-        tokens, token_masks = self.tokenizer.tokenize_subtask_prompt(prompt)
-        return {**data, "tokenized_prompt": tokens, "tokenized_prompt_mask": token_masks}
-
-
-@dataclasses.dataclass(frozen=True)
 class TokenizeSubtaskTraining(DataTransformFn):
     """Tokenize prompt for pi0.5 subtask training (joint CE + flow-matching loss).
 
